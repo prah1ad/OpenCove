@@ -109,7 +109,7 @@ struct SettingsView: View {
                 Toggle("Expand on hover (otherwise click)", isOn: $settings.expandOnHover)
                 Toggle("Haptic feedback", isOn: $settings.hapticFeedback)
                 Toggle("Trackpad gestures", isOn: $settings.swipeGestures)
-                Text("Swipe down to open, up to close, left/right to skip tracks.")
+                Text("Swipe down to open, up to close. Left/right switches between Now Playing and Calendar when open, and skips tracks when closed.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Keep music activity visible while paused", isOn: $settings.showPausedMedia)
             }
@@ -133,6 +133,26 @@ struct SettingsView: View {
                 Toggle("Upcoming calendar events", isOn: $settings.calendarEnabled)
                 if settings.calendarEnabled {
                     Stepper("Remind \(settings.calendarLeadMinutes) min before", value: $settings.calendarLeadMinutes, in: 1...60)
+                    Text("Your next event appears under the clock when you open the island.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Calendar Privacy Settings…") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+            }
+
+            Section("Test Notifications") {
+                HStack {
+                    testButton("Volume", "volume")
+                    testButton("Charging", "charging")
+                    testButton("Low Battery", "lowBattery")
+                }
+                HStack {
+                    testButton("Bluetooth", "bluetooth")
+                    testButton("Calendar", "calendar")
+                    testButton("Now Playing", "peek")
                 }
             }
 
@@ -143,6 +163,12 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 480, height: 620)
+    }
+
+    private func testButton(_ title: String, _ kind: String) -> some View {
+        Button(title) {
+            NotificationCenter.default.post(name: .openCoveTestHUD, object: kind)
+        }
     }
 }
 

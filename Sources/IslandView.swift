@@ -39,13 +39,14 @@ struct IslandView: View {
                 .transition(.blurFade)
         case .hud:
             if let hud = model.hud {
-                HUDView(hud: hud, media: media)
+                HUDView(hud: hud, media: media,
+                        sideWidth: max(40, (model.size.width - model.geometry.notchSize.width) / 2 - topRadius - 14))
                     .padding(.horizontal, topRadius + 8)
                     .id(hud.kind)
                     .transition(.blurFade)
             }
         case .expanded:
-            ExpandedView(media: media, battery: battery, calendar: calendar,
+            ExpandedView(model: model, media: media, battery: battery, calendar: calendar,
                          showCalendar: settings.calendarEnabled,
                          headerHeight: model.geometry.notchSize.height)
                 .padding(.horizontal, topRadius + 16)
@@ -74,12 +75,16 @@ struct CompactMusicView: View {
 struct HUDView: View {
     let hud: IslandModel.HUD
     @ObservedObject var media: NowPlaying
+    /// Usable width on each side of the notch, so nothing slides under the camera.
+    let sideWidth: CGFloat
 
     var body: some View {
-        HStack(spacing: 6) {
-            leading
-            Spacer(minLength: 8)
-            trailing
+        HStack(spacing: 0) {
+            HStack(spacing: 6) { leading }
+                .frame(width: sideWidth, alignment: .leading)
+            Spacer(minLength: 0)
+            HStack(spacing: 6) { trailing }
+                .frame(width: sideWidth, alignment: .trailing)
         }
         .font(.system(size: 12, weight: .semibold))
         .foregroundStyle(Color.white)
@@ -100,10 +105,10 @@ struct HUDView: View {
                 .frame(width: 20, alignment: .leading)
         case .bluetooth(let name, _, let audio):
             Image(systemName: audio ? "headphones" : "dot.radiowaves.left.and.right")
-            Text(name).frame(maxWidth: 110, alignment: .leading)
+            MarqueeText(text: name).frame(maxWidth: .infinity)
         case .calendar(let title, _):
             Image(systemName: "calendar").foregroundStyle(Color.red)
-            Text(title).frame(maxWidth: 110, alignment: .leading)
+            MarqueeText(text: title).frame(maxWidth: .infinity)
         case .peek:
             ArtworkView(image: media.artwork, size: 20, corner: 5)
             AudioBars(playing: media.isPlaying, color: media.accent)
@@ -162,6 +167,7 @@ struct LevelBar: View {
 // MARK: - Expanded
 
 struct ExpandedView: View {
+    @ObservedObject var model: IslandModel
     @ObservedObject var media: NowPlaying
     @ObservedObject var battery: BatteryMonitor
     @ObservedObject var calendar: CalendarMonitor
@@ -171,7 +177,7 @@ struct ExpandedView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(media.sourceLabel)
+                Text(model.page == 0 ? media.sourceLabel : "Calendar")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.5))
                 Spacer()
@@ -186,18 +192,230 @@ struct ExpandedView: View {
             }
             .frame(height: headerHeight)
 
+            // Fills the space between header and page dots, so the content sits centred.
             HStack(alignment: .center, spacing: 16) {
-                MediaPanel(media: media)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ZStack(alignment: .leading) {
+                    if model.page == 0 {
+                        MediaPanel(media: media)
+                            .transition(.blurFade)
+                    } else {
+                        MiniCalendarPanel(calendar: calendar, enabled: showCalendar)
+                            .transition(.blurFade)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(IslandModel.spring, value: model.page)
+
                 Rectangle()
                     .fill(Color.white.opacity(0.08))
-                    .frame(width: 1, height: 84)
-                ClockPanel(next: showCalendar ? calendar.next : nil)
-                    .frame(width: 118, alignment: .leading)
+                    .frame(width: 1, height: 96)
+                ClockPanel(calendar: (showCalendar && model.page == 0) ? calendar : nil)
+                    .frame(width: 124, alignment: .leading)
             }
-            .padding(.top, 8)
+            .frame(maxHeight: .infinity)
 
-            Spacer(minLength: 0)
+            PageDots(page: model.page, count: 2) { model.setPage($0) }
+        }
+    }
+}
+
+struct PageDots: View {
+    let page: Int
+    let count: Int
+    let select: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<count, id: \.self) { i in
+                Capsule()
+                    .fill(Color.white.opacity(i == page ? 0.9 : 0.25))
+                    .frame(width: i == page ? 14 : 5, height: 5)
+                    .contentShape(Rectangle().inset(by: -4))
+                    .onTapGesture { select(i) }
+            }
+        }
+        .animation(IslandModel.spring, value: page)
+        .frame(height: 8)
+    }
+}
+
+// MARK: - Mini calendar page
+
+struct MiniCalendarPanel: View {
+    @ObservedObject var calendar: CalendarMonitor
+    let enabled: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            MonthGrid(eventDays: enabled ? calendar.eventDays : [])
+            AgendaList(calendar: calendar, enabled: enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+struct MonthGrid: View {
+    let eventDays: Set<Int>
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { ctx in
+            let info = MonthInfo(date: ctx.date)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(ctx.date, format: .dateTime.month(.wide))
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.red)
+                HStack(spacing: 0) {
+                    ForEach(Array(info.weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                        Text(symbol)
+                            .frame(width: 21)
+                    }
+                }
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.4))
+                ForEach(0..<info.weeks, id: \.self) { week in
+                    HStack(spacing: 0) {
+                        ForEach(0..<7, id: \.self) { column in
+                            dayCell(info.day(week: week, column: column), today: info.today)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dayCell(_ day: Int?, today: Int) -> some View {
+        ZStack {
+            if let day {
+                if day == today {
+                    Circle().fill(Color.red).frame(width: 15, height: 15)
+                }
+                Text("\(day)")
+                    .font(.system(size: 9, weight: day == today ? .bold : .medium).monospacedDigit())
+                    .foregroundStyle(Color.white.opacity(day == today ? 1 : 0.8))
+                if eventDays.contains(day) && day != today {
+                    Circle().fill(Color.white.opacity(0.6))
+                        .frame(width: 2.5, height: 2.5)
+                        .offset(y: 7)
+                }
+            }
+        }
+        .frame(width: 21, height: 14)
+    }
+}
+
+/// Layout maths for a month grid that respects the user's first day of the week.
+struct MonthInfo {
+    let weekdaySymbols: [String]
+    let leadingBlanks: Int
+    let daysInMonth: Int
+    let today: Int
+
+    init(date: Date, calendar: Calendar = .current) {
+        let first = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
+        let firstWeekday = calendar.firstWeekday // 1 = Sunday
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        weekdaySymbols = Array(symbols[(firstWeekday - 1)...] + symbols[..<(firstWeekday - 1)])
+        leadingBlanks = (calendar.component(.weekday, from: first) - firstWeekday + 7) % 7
+        daysInMonth = calendar.range(of: .day, in: .month, for: date)?.count ?? 30
+        today = calendar.component(.day, from: date)
+    }
+
+    var weeks: Int { (leadingBlanks + daysInMonth + 6) / 7 }
+
+    func day(week: Int, column: Int) -> Int? {
+        let d = week * 7 + column - leadingBlanks + 1
+        return (1...daysInMonth).contains(d) ? d : nil
+    }
+}
+
+struct AgendaList: View {
+    @ObservedObject var calendar: CalendarMonitor
+    let enabled: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !enabled {
+                placeholder("Turn on calendar events in Settings to see your agenda.")
+            } else if calendar.status == .denied {
+                placeholder("Calendar access is off. Allow it in Settings.")
+            } else if calendar.upcoming.isEmpty {
+                placeholder("Nothing scheduled this week.")
+            } else {
+                ForEach(Array(calendar.upcoming.enumerated()), id: \.offset) { _, event in
+                    HStack(alignment: .top, spacing: 6) {
+                        Capsule().fill(event.color).frame(width: 3, height: 26)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(event.title)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.white)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(Self.when(event))
+                                .font(.system(size: 10))
+                                .foregroundStyle(Color.white.opacity(0.5))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func placeholder(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(Color.white.opacity(0.5))
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    static func when(_ event: CalendarMonitor.Upcoming) -> String {
+        let cal = Calendar.current
+        let day: String
+        if cal.isDateInToday(event.start) {
+            day = "Today"
+        } else if cal.isDateInTomorrow(event.start) {
+            day = "Tomorrow"
+        } else {
+            day = event.start.formatted(.dateTime.weekday(.abbreviated))
+        }
+        if event.isAllDay { return "\(day) · All day" }
+        return "\(day) · \(event.start.formatted(.dateTime.hour().minute()))"
+    }
+}
+
+// MARK: - Scrolling text for long names
+
+/// Shows the text normally if it fits; otherwise scrolls it back and forth.
+struct MarqueeText: View {
+    let text: String
+    var font: Font = .system(size: 12, weight: .semibold)
+    var height: CGFloat = 16
+    @State private var offset: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { box in
+            Text(text)
+                .font(font)
+                .lineLimit(1)
+                .fixedSize()
+                .background(GeometryReader { measured in
+                    Color.clear.onAppear { start(textWidth: measured.size.width, boxWidth: box.size.width) }
+                })
+                .offset(x: offset)
+                .frame(width: box.size.width, height: box.size.height, alignment: .leading)
+        }
+        .frame(height: height)
+        .clipped()
+    }
+
+    private func start(textWidth: CGFloat, boxWidth: CGFloat) {
+        let overflow = textWidth - boxWidth
+        guard overflow > 1 else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            withAnimation(.linear(duration: Double(overflow) / 35).repeatForever(autoreverses: true)) {
+                offset = -overflow
+            }
         }
     }
 }
@@ -275,30 +493,80 @@ struct ProgressRow: View {
 }
 
 struct ClockPanel: View {
-    let next: CalendarMonitor.Upcoming?
+    /// nil when calendar events are turned off in Settings.
+    var calendar: CalendarMonitor?
+
+    /// Formats just "AM"/"PM", or nil if this Mac uses a 24-hour clock.
+    static let amPMFormatter: DateFormatter? = {
+        let pattern = DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current) ?? ""
+        guard pattern.contains("a") else { return nil }
+        let f = DateFormatter()
+        f.locale = .current
+        f.dateFormat = "a"
+        return f
+    }()
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             VStack(alignment: .leading, spacing: 2) {
-                Text(ctx.date, format: .dateTime.hour().minute())
-                    .font(.system(size: 30, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Color.white)
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text(ctx.date, format: .dateTime.hour(.defaultDigits(amPM: .omitted)).minute())
+                        .font(.system(size: 30, weight: .semibold, design: .rounded).monospacedDigit())
+                    if let amPM = Self.amPMFormatter?.string(from: ctx.date) {
+                        Text(amPM)
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.6))
+                    }
+                }
+                .foregroundStyle(Color.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 Text(ctx.date, format: .dateTime.weekday(.wide).month(.abbreviated).day())
                     .font(.system(size: 12))
                     .foregroundStyle(Color.white.opacity(0.55))
-                if let next {
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if let calendar {
+                    CalendarLine(calendar: calendar)
+                        .padding(.top, 4)
+                }
+            }
+        }
+    }
+}
+
+struct CalendarLine: View {
+    @ObservedObject var calendar: CalendarMonitor
+
+    var body: some View {
+        Group {
+            if let next = calendar.next {
+                VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         Circle().fill(Color.red).frame(width: 5, height: 5)
                         Text(next.title).lineLimit(1)
                     }
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.white.opacity(0.85))
-                    .padding(.top, 4)
-                    Text(next.start, format: .dateTime.hour().minute())
+                    Text(next.start, format: .dateTime.weekday(.abbreviated).hour().minute())
                         .font(.system(size: 10))
                         .foregroundStyle(Color.white.opacity(0.45))
                 }
+            } else {
+                Text(message)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.45))
+                    .lineLimit(2)
             }
+        }
+    }
+
+    private var message: String {
+        switch calendar.status {
+        case .ready: return "No events in the next 24 h"
+        case .denied: return "Calendar access off — see Settings"
+        case .waiting: return "Waiting for calendar access…"
+        case .off: return ""
         }
     }
 }

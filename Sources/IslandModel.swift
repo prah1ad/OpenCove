@@ -40,6 +40,8 @@ final class IslandModel: ObservableObject {
     @Published var geometry: NotchGeometry
     @Published private(set) var expanded = false
     @Published private(set) var hud: HUD?
+    /// Page of the open island: 0 = now playing, 1 = calendar.
+    @Published private(set) var page = 0
 
     let settings: Settings
     let media: NowPlaying
@@ -51,6 +53,7 @@ final class IslandModel: ObservableObject {
     private var bag = Set<AnyCancellable>()
     private var hudTask: Task<Void, Never>?
     private var warnedLowBattery = false
+    private var testObserver: NSObjectProtocol?
 
     init(geometry: NotchGeometry) {
         self.geometry = geometry
@@ -95,8 +98,15 @@ final class IslandModel: ObservableObject {
         }
 
         calendar.onReminder = { [weak self] title, minutes in
-            self?.show(.calendar(title: title, minutes: minutes), for: 4)
+            self?.show(.calendar(title: title, minutes: minutes), for: 6)
         }
+        testObserver = NotificationCenter.default.addObserver(
+            forName: .openCoveTestHUD, object: nil, queue: .main
+        ) { [weak self] note in
+            let kind = note.object as? String ?? ""
+            Task { @MainActor in self?.showTest(kind) }
+        }
+
         calendar.setEnabled(settings.calendarEnabled)
         settings.$calendarEnabled
             .removeDuplicates()
@@ -120,8 +130,8 @@ final class IslandModel: ObservableObject {
         let n = geometry.notchSize
         let base = n.width + Self.ear * 2
         switch mode {
-        case .expanded: return CGSize(width: max(base + 160, 540), height: n.height + 140)
-        case .hud:      return CGSize(width: base + ((hud?.isWide ?? false) ? 280 : 200), height: n.height)
+        case .expanded: return CGSize(width: max(base + 200, 580), height: n.height + 160)
+        case .hud:      return CGSize(width: base + ((hud?.isWide ?? false) ? 300 : 210), height: n.height + 4)
         case .music:    return CGSize(width: base + 88, height: n.height)
         case .idle:     return CGSize(width: base, height: n.height)
         }
@@ -138,13 +148,36 @@ final class IslandModel: ObservableObject {
         }
     }
 
+    func setPage(_ newPage: Int) {
+        let clamped = min(max(newPage, 0), 1)
+        guard clamped != page else { return }
+        withAnimation(Self.spring) { page = clamped }
+        if settings.hapticFeedback {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        }
+    }
+
     /// Click-to-open, used when "expand on hover" is off.
     func tapped() {
         if !expanded { setExpanded(true) }
     }
 
+    /// Preview a notification from the Settings window.
+    func showTest(_ kind: String) {
+        switch kind {
+        case "volume": show(.volume(level: 0.6, muted: false))
+        case "charging": show(.charging(level: battery.level))
+        case "lowBattery": show(.lowBattery(level: min(battery.level, settings.lowBatteryThreshold)))
+        case "bluetooth": show(.bluetooth(name: "Test Headphones", connected: true, audio: true))
+        case "calendar": show(.calendar(title: calendar.next?.title ?? "Test event", minutes: settings.calendarLeadMinutes), for: 6)
+        case "peek": if media.hasTrack { show(.peek, for: settings.peekDuration) }
+        default: break
+        }
+    }
+
     func show(_ newHUD: HUD, for seconds: Double? = nil) {
         guard !expanded else { return } // don't interrupt the open island
+        NSLog("OpenCove: showing \(newHUD.kind) notification")
         withAnimation(Self.spring) { hud = newHUD }
         let duration = seconds ?? settings.hudDuration
         hudTask?.cancel()
@@ -174,4 +207,8 @@ final class IslandModel: ObservableObject {
         warnedLowBattery = true
         show(.lowBattery(level: battery.level), for: max(settings.hudDuration, 3))
     }
+}
+
+extension Notification.Name {
+    static let openCoveTestHUD = Notification.Name("OpenCoveTestHUD")
 }

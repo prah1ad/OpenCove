@@ -8,7 +8,8 @@ struct NotchGeometry: Equatable {
     var hasNotch: Bool
 
     @MainActor
-    init(screen: NSScreen, settings: Settings = .shared) {
+    init(screen: NSScreen) {
+        let settings = Settings.shared
         let top = screen.safeAreaInsets.top
         var size: CGSize
         if top > 0, let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
@@ -197,10 +198,16 @@ final class IslandController {
         let w = scrollAccum.width, h = scrollAccum.height
         if abs(w) > 50, abs(w) > abs(h) * 1.5 {
             scrollFired = true
-            guard model.media.hasTrack else { return }
-            if w < 0 { model.media.next() } else { model.media.previous() }
-            if settings.hapticFeedback {
-                NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+            if model.expanded {
+                // Open island: swipe between Now Playing and Calendar.
+                model.setPage(w < 0 ? model.page + 1 : model.page - 1)
+            } else {
+                // Closed island: skip tracks.
+                guard model.media.hasTrack else { return }
+                if w < 0 { model.media.next() } else { model.media.previous() }
+                if settings.hapticFeedback {
+                    NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+                }
             }
         } else if abs(h) > 30, abs(h) > abs(w) {
             scrollFired = true
